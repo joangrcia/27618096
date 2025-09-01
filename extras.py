@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from datetime import datetime
 
+import subprocess
+
 FILENAME = "baseurl.txt"
 
 # --- Fungsi CRUD ---
@@ -114,6 +116,25 @@ def time_format(next_time_ms):
         return dt.strftime("%Y-%m-%d")  # cuma tahun-bulan-tanggal
     except Exception:
         return "-"
+    
+def check_latest_version():
+    try:
+        # Ambil update terbaru dari remote
+        subprocess.run(["git", "fetch", "origin"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Cek apakah HEAD sama dengan remote/main
+        local = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+        remote = subprocess.check_output(["git", "rev-parse", "origin/master"]).decode().strip()
+
+        if local == remote:
+            print("✅ Script sudah yang terbaru.\n")
+            return True
+        else:
+            print("⚠️ Update tersedia! Jalankan update untuk versi terbaru.\n")
+            return False
+    except Exception as e:
+        print(f"⚠️ Tidak bisa cek versi: {e}\n")
+        return False
         
 
 # --- Prompt interaktif ---

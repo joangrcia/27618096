@@ -4,7 +4,7 @@ import random
 import sys
 import itertools
 from tasks import do_auth, run_get_free_balance_async, sanitize_filename
-from extras import read_file, read_proxies, random_number, load_json
+from extras import read_file, read_proxies, random_number, load_json, check_latest_version
 
 async def spinner_task(line, account, state_event):
     spinner = itertools.cycle("|/-\\")
@@ -168,6 +168,7 @@ async def main_limited(base_url, tasks_selected, total_accounts=10, max_concurre
 
 
 if __name__ == "__main__":
+    check_latest_version()
     base_url = prompt_base_url()
     p_tasks = prompt_tasks()
     p_proxy = prompt_use_proxy()
