@@ -126,10 +126,10 @@ def check_latest_version():
         remote_msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B", f"origin/{branch}"]).decode().strip()
 
         if local_commit == remote_commit:
-            print(f"✅ Script sudah yang terbaru (Branch: {branch}, Commit: {local_commit[:7]})")
+            print(f"✅ Script sudah yang terbaru (Branch: {branch}, Commit: {local_commit[:7]})\n")
         else:
-            print(f"⚠️ Update tersedia! (Branch: {branch})")
-            print(f"   Commit terakhir di remote: {remote_commit[:7]} - {remote_msg}")
+            print(f"⚠️ Update tersedia! (Branch: {branch})\n")
+            print(f"   Commit terakhir di remote: {remote_commit[:7]} - {remote_msg}\n")
 
     except Exception as e:
         print(f"⚠️ Tidak bisa cek versi: {e}")

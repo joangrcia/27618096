@@ -195,6 +195,9 @@ if __name__ == "__main__":
             r_proxies.extend(proxies)
             print(f"{len(r_proxies)} proxies loaded.")
 
+    p_acc_creations = 1  # default minimal 1 account
+    p_thread_count = 1   # default 1 thread
+
     if "register" in p_tasks:
         p_acc_creations = prompt_account_creation()
         p_thread_count = prompt_thread_count(max_allowed=p_acc_creations)
