@@ -174,9 +174,9 @@ async def main_limited(base_url, tasks_selected, total_accounts=10, max_concurre
 
 
     info_line = start_line + total_accounts + 1
-    print(f"\033[{info_line};0H==========TASK INFO===========")
+    print(f"\033[{info_line};0H==========TASK INFO==========")
     print(f"\033[{info_line+1};0HSuccess: {total_success} | Failed: {total_fail}")
-    print(f"\033[{info_line+2};0H==============================")
+    print(f"\033[{info_line+2};0H=============================")
 
 
 
