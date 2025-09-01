@@ -33,8 +33,6 @@ def prompt_base_url():
             choices=items
         ).ask()
         return selected
-    else:
-        print("Data kosong.")
 
 def prompt_account_creation():
     return int(questionary.text(
