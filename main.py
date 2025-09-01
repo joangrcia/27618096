@@ -3,6 +3,7 @@ import asyncio
 import random
 import sys
 import itertools
+import subprocess
 from tasks import do_auth, run_get_free_balance_async, sanitize_filename
 from extras import read_file, read_proxies, random_number, load_json, check_latest_version
 
@@ -124,10 +125,24 @@ async def worker(semaphore, base_url, username, proxies, tasks_selected, line):
                 state_event["msg"] = "Balance checked (dummy)"
 
             elif task == "update":
-                state_event["msg"] = "Updating Script..."
-                # TODO: jalankan update script
-                await asyncio.sleep(0.5)
-                state_event["msg"] = "Script updated (dummy)"
+                state_event["msg"] = "Checking for update..."
+                try:
+                    # Ambil branch saat ini
+                    branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode().strip()
+                    # Ambil commit lokal & remote
+                    local_commit = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+                    subprocess.run(["git", "fetch", "origin"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    remote_commit = subprocess.check_output(["git", "rev-parse", f"origin/{branch}"]).decode().strip()
+                    remote_msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B", f"origin/{branch}"]).decode().strip()
+
+                    if local_commit == remote_commit:
+                        state_event["msg"] = f"Script sudah terbaru (Branch: {branch}, Commit: {local_commit[:7]})"
+                    else:
+                        state_event["msg"] = f"Update tersedia! Mengambil update..."
+                        subprocess.run(["git", "pull", "origin", branch], check=True)
+                        state_event["msg"] = f"Update selesai! Commit terakhir: {remote_commit[:7]} - {remote_msg}"
+                except Exception as e:
+                    state_event["msg"] = f"Update gagal: {e}"
 
         state_event["done"] = True
         await spinner

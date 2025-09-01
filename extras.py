@@ -119,22 +119,20 @@ def time_format(next_time_ms):
     
 def check_latest_version():
     try:
-        # Ambil update terbaru dari remote
         subprocess.run(["git", "fetch", "origin"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Cek apakah HEAD sama dengan remote/main
-        local = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
-        remote = subprocess.check_output(["git", "rev-parse", "origin/master"]).decode().strip()
+        branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode().strip()
+        local_commit = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+        remote_commit = subprocess.check_output(["git", "rev-parse", f"origin/{branch}"]).decode().strip()
+        remote_msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B", f"origin/{branch}"]).decode().strip()
 
-        if local == remote:
-            print("✅ Script sudah yang terbaru.\n")
-            return True
+        if local_commit == remote_commit:
+            print(f"✅ Script sudah yang terbaru (Branch: {branch}, Commit: {local_commit[:7]})")
         else:
-            print("⚠️ Update tersedia! Jalankan update untuk versi terbaru.\n")
-            return False
+            print(f"⚠️ Update tersedia! (Branch: {branch})")
+            print(f"   Commit terakhir di remote: {remote_commit[:7]} - {remote_msg}")
+
     except Exception as e:
-        print(f"⚠️ Tidak bisa cek versi: {e}\n")
-        return False
+        print(f"⚠️ Tidak bisa cek versi: {e}")
         
 
 # --- Prompt interaktif ---
