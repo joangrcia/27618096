@@ -4,7 +4,7 @@ import random
 import itertools
 import subprocess
 from pathlib import Path
-from tasks import do_auth, run_get_free_balance_async, sanitize_filename
+from tasks import do_auth, run_get_free_balance_async, run_check_balance_async, run_claim_bonus_async
 from extras import read_file, read_proxies, random_number, load_json, check_latest_version, txt_to_json_accounts
 from rich.console import Console
 from rich.live import Live
@@ -44,7 +44,7 @@ async def spinner_task(states: dict, refresh_rate: float = 0.2):
             pass
 
 # ---------------- WORKER ----------------
-async def worker(semaphore, base_url, username, proxies, tasks_selected, file_name):
+async def worker(semaphore, base_url, username, proxies, tasks_selected, file_name, balance_threshold=300):
     async with semaphore:
         proxy = random.choice(proxies) if proxies else ""
         results = {}
@@ -66,46 +66,97 @@ async def worker(semaphore, base_url, username, proxies, tasks_selected, file_na
 
                 elif task == "getFreeBalance":
                     all_states[task_key]["msg"] = f"{task}: Preparing Free Balance..."
-                    # Cari akun
                     idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
                     if idx is None:
                         all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
                         continue
 
                     sid = accounts_list[idx].get("sid")
-                    # Kalau SID tidak ada, login dulu
+                    if not sid:
+                        all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
+                        auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
+                        sid = None
+                        if auth_result.get("success", 0) > 0 and file_name:
+                            accounts_json = load_json(file_name)
+                            for acc in accounts_json:
+                                if acc["username"] == username:
+                                    sid = acc.get("sid")
+                                    accounts_list[idx]["sid"] = sid
+                                    break
+                        else:
+                            all_states[task_key]["msg"] = f"{task}: Login gagal, skip Free Balance"
+                            task_results["fail"] += 1
+                            continue
+
+                    proxy_url = f"http://{proxy}" if proxy else None
+                    balance_result = await run_get_free_balance_async(sid, username, base_url, update_state, proxy_url)
+                    results["getFreeBalance"] = balance_result
+
+                elif task == "claimBonus":
+                    all_states[task_key]["msg"] = f"{task}: Claiming bonus..."
+                    # Cari akun
+                    idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
+                    if idx is None:
+                        all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
+                        task_results["fail"] += 1
+                        continue
+
+                    sid = accounts_list[idx].get("sid")
+                    # Kalau SID kosong, login dulu
                     if not sid:
                         all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
                         auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
                         sid = None
                         if auth_result.get("success", 0) > 0:
                             if file_name:
-                                # Load data JSON terbaru
                                 accounts_json = load_json(file_name)
-                                # Cari akun yang sama berdasarkan username
                                 for acc in accounts_json:
                                     if acc["username"] == username:
                                         sid = acc.get("sid")
-                                        uuid = acc.get("uuid")
-                                        # Update accounts_list supaya internal list sinkron
                                         accounts_list[idx]["sid"] = sid
-                                        accounts_list[idx]["uuid"] = uuid
                                         break
-                            else:
-                                # fallback jika file_name tidak ada
-                                sid = accounts_list[idx].get("sid")
                         else:
-                            all_states[task_key]["msg"] = f"{task}: Login gagal, skip Free Balance"
+                            all_states[task_key]["msg"] = f"{task}: Login gagal, skip claimBonus"
                             task_results["fail"] += 1
                             continue
 
+                    proxy_url = f"http://{proxy}" if proxy else None
+                    claim_result = await run_claim_bonus_async(sid, username, base_url, update_state=update_state, proxy_url=proxy_url)
+                    results["claimBonus"] = claim_result
 
-                    if sid:
-                        balance_result = await run_get_free_balance_async(sid, username, base_url, update_state)
-                        results["getFreeBalance"] = balance_result
+                elif task == "checkBalance":
+                    all_states[task_key]["msg"] = f"{task}: Checking balance..."
+                    idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
+                    if idx is None:
+                        all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
+                        task_results["fail"] += 1
+                        continue
 
-                elif task in ["claimBonus", "checkBalance"]:
-                    await asyncio.sleep(0.5)
+                    sid = accounts_list[idx].get("sid")
+                    if not sid:
+                        all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
+                        auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
+                        sid = None
+                        if auth_result.get("success", 0) > 0 and file_name:
+                            accounts_json = load_json(file_name)
+                            for acc in accounts_json:
+                                if acc["username"] == username:
+                                    sid = acc.get("sid")
+                                    accounts_list[idx]["sid"] = sid
+                                    break
+                        else:
+                            all_states[task_key]["msg"] = f"{task}: Login gagal, skip checkBalance"
+                            task_results["fail"] += 1
+                            continue
+
+                    proxy_url = f"http://{proxy}" if proxy else None
+                    balance_result = await run_check_balance_async(
+                        sid, username, base_url,
+                        balance_threshold=balance_threshold,
+                        update_state=update_state,
+                        proxy_url=proxy_url
+                    )
+                    results["checkBalance"] = balance_result
 
                 elif task == "update":
                     try:
@@ -126,9 +177,8 @@ async def worker(semaphore, base_url, username, proxies, tasks_selected, file_na
 
         return results
 
-
 # ---------------- MAIN ----------------
-async def main_limited(base_url, tasks_selected, accounts_list=None, num_accounts=None, max_concurrent=1, proxies=None, file_name=None):
+async def main_limited(base_url, tasks_selected, accounts_list=None, num_accounts=None, max_concurrent=1, proxies=None, file_name=None, balance_threshold=300):
     semaphore = asyncio.Semaphore(max_concurrent)
     tasks = []
 
@@ -138,7 +188,7 @@ async def main_limited(base_url, tasks_selected, accounts_list=None, num_account
         usernames = [random_number() for _ in range(num_accounts)]
 
     for username in usernames:
-        tasks.append(asyncio.create_task(worker(semaphore, base_url, username, proxies, tasks_selected, file_name)))
+        tasks.append(asyncio.create_task(worker(semaphore, base_url, username, proxies, tasks_selected, file_name, balance_threshold)))
 
     spinner_coro = asyncio.create_task(spinner_task(all_states))
     try:
@@ -197,6 +247,13 @@ def prompt_max_concurrent(max_allowed):
         validate=lambda val: True if val.isdigit() and 1 <= int(val) <= max_allowed else f"Enter 1-{max_allowed}"
     ).ask())
 
+def prompt_balance_threshold(default=300):
+    return float(questionary.text(
+        f"Set balance threshold (default {default}):",
+        default=str(default),
+        validate=lambda val: True if val.replace(".","",1).isdigit() else "Masukkan angka valid"
+    ).ask())
+
 # ---------------- ENTRY ----------------
 if __name__ == "__main__":
     check_latest_version()
@@ -208,9 +265,10 @@ if __name__ == "__main__":
     accounts_list = None
     max_allowed = None
     file_path = None
+    balance_threshold = 300
 
-    # Jika task getFreeBalance dipilih, minta user pilih file
-    if "getFreeBalance" in tasks_selected:
+    # Jika task getFreeBalance atau claimBonus dipilih, minta user pilih file
+    if any(t in tasks_selected for t in ["getFreeBalance", "claimBonus", "checkBalance"]):
         file_path = prompt_file("./data/accounts", extensions=[".json", ".txt"])
         if file_path is None:
             print("Tidak ada file tersedia, keluar...")
@@ -231,7 +289,19 @@ if __name__ == "__main__":
     else:
         max_allowed = 1000000  # practically unlimited jika tidak ada akun list
 
+    if "checkBalance" in tasks_selected:
+        balance_threshold = prompt_balance_threshold(300)
+
+    if max_allowed is None:
+        max_allowed = 1000000
+
     num_accounts = prompt_num_accounts(max_allowed)
     max_concurrent = prompt_max_concurrent(num_accounts)
 
-    asyncio.run(main_limited(base_url, tasks_selected, accounts_list, num_accounts=num_accounts, max_concurrent=max_concurrent, proxies=proxies, file_name=file_path))
+    asyncio.run(main_limited(
+        base_url, tasks_selected,
+        accounts_list, num_accounts=num_accounts,
+        max_concurrent=max_concurrent,
+        proxies=proxies, file_name=file_path,
+        balance_threshold=balance_threshold
+    ))
