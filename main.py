@@ -267,6 +267,17 @@ if __name__ == "__main__":
     file_path = None
     balance_threshold = 300
 
+    # Jika update saja
+    if tasks_selected == ["update"]:
+        asyncio.run(main_limited(
+            base_url, tasks_selected,
+            accounts_list, num_accounts=1,
+            max_concurrent=1,
+            proxies=proxies, file_name=None,
+            balance_threshold=1
+        ))
+        exit(0)
+
     # Jika task getFreeBalance atau claimBonus dipilih, minta user pilih file
     if any(t in tasks_selected for t in ["getFreeBalance", "claimBonus", "checkBalance"]):
         file_path = prompt_file("./data/accounts", extensions=[".json", ".txt"])
