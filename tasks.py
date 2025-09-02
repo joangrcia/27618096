@@ -87,6 +87,9 @@ async def do_auth(baseUrl, username, password, mode="login", proxy="", update_st
                     results = {"username": username, "sid": result["sid"], "uuid": result["uuid"], "next_roulette": ""}
                     if file_name:
                         append_json(results, file_name)
+                    else:
+                        fileName = sanitize_filename(baseUrl)
+                        append_json(results, fileName)
 
                     if not login_message:
                         await update_state(f"[{username}] createAccount: Login Successful.....")
