@@ -1,219 +1,237 @@
 import questionary
 import asyncio
 import random
-import sys
 import itertools
 import subprocess
+from pathlib import Path
 from tasks import do_auth, run_get_free_balance_async, sanitize_filename
-from extras import read_file, read_proxies, random_number, load_json, check_latest_version
+from extras import read_file, read_proxies, random_number, load_json, check_latest_version, txt_to_json_accounts
+from rich.console import Console
+from rich.live import Live
+from rich.text import Text
+import json
 
-async def spinner_task(line, account, state_event):
-    spinner = itertools.cycle("|/-\\")
-    while not state_event["done"]:
-        print(f"\033[{line};0H[ {next(spinner)} ] [{account}] {state_event['msg']}", end="", flush=True)
-        await asyncio.sleep(0.1)
-    print(f"\033[{line};0H[✓] [{account}] {state_event['msg']}{' ' * 20}", flush=True)
+console = Console(color_system="auto")
+task_results = {"success": 0, "fail": 0}
+all_states = {}
+spinner_chars = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
 
-proxies_result = []
+# ---------------- SPINNER ----------------
+async def spinner_task(states: dict, refresh_rate: float = 0.2):
+    spinners = {}
+    with Live(console=console, refresh_per_second=int(1/refresh_rate)) as live:
+        try:
+            while True:
+                lines = []
+                for username, state in states.items():
+                    if username not in spinners:
+                        spinners[username] = itertools.cycle(spinner_chars)
+                    spinner_char = next(spinners[username])
+                    if state["done"]:
+                        lines.append(f"[{username}] {state['msg']}")
+                    else:
+                        lines.append(f"{spinner_char} [{username}] {state['msg']}")
+                lines.append("")
+                lines.append("==========TASK INFO==========")
+                lines.append(f"Success: {task_results['success']} | Failed: {task_results['fail']}")
+                lines.append("=============================")
+                live.update(Text("\n".join(lines)))
 
-total_accounts = 0
+                if states and all(state["done"] for state in states.values()):
+                    break
+                await asyncio.sleep(refresh_rate)
+        except asyncio.CancelledError:
+            pass
 
-TASK_OPTIONS = [
-    {"id": "register", "label": "Create Accounts"},
-    {"id": "claimBonus", "label": "Claim Bonus"},
-    {"id": "getFreeBalance", "label": "Get Free Balance"},
-    {"id": "checkBalance", "label": "Check Balance"},
-    {"id": "update", "label": "Update Script"},
-]
+# ---------------- WORKER ----------------
+async def worker(semaphore, base_url, username, proxies, tasks_selected, file_name):
+    async with semaphore:
+        proxy = random.choice(proxies) if proxies else ""
+        results = {}
+
+        for task in tasks_selected:
+            task_key = f"{username}-{task}"
+            all_states[task_key] = {"msg": f"{task}: Starting...", "done": False}
+
+            async def update_state(msg, key=task_key):
+                all_states[key]["msg"] = msg
+
+            try:
+                if task == "register":
+                    all_states[task_key]["msg"] = f"{task}: Registering..."
+                    auth_result = await do_auth(base_url, username, username, "register", proxy, update_state, file_name)
+                    results["register"] = auth_result
+                    task_results["success"] += auth_result.get("success", 0)
+                    task_results["fail"] += auth_result.get("fail", 0)
+
+                elif task == "getFreeBalance":
+                    all_states[task_key]["msg"] = f"{task}: Preparing Free Balance..."
+                    # Cari akun
+                    idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
+                    if idx is None:
+                        all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
+                        continue
+
+                    sid = accounts_list[idx].get("sid")
+                    # Kalau SID tidak ada, login dulu
+                    if not sid:
+                        all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
+                        auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
+                        sid = None
+                        if auth_result.get("success", 0) > 0:
+                            if file_name:
+                                # Load data JSON terbaru
+                                accounts_json = load_json(file_name)
+                                # Cari akun yang sama berdasarkan username
+                                for acc in accounts_json:
+                                    if acc["username"] == username:
+                                        sid = acc.get("sid")
+                                        uuid = acc.get("uuid")
+                                        # Update accounts_list supaya internal list sinkron
+                                        accounts_list[idx]["sid"] = sid
+                                        accounts_list[idx]["uuid"] = uuid
+                                        break
+                            else:
+                                # fallback jika file_name tidak ada
+                                sid = accounts_list[idx].get("sid")
+                        else:
+                            all_states[task_key]["msg"] = f"{task}: Login gagal, skip Free Balance"
+                            task_results["fail"] += 1
+                            continue
+
+
+                    if sid:
+                        balance_result = await run_get_free_balance_async(sid, username, base_url, update_state)
+                        results["getFreeBalance"] = balance_result
+
+                elif task in ["claimBonus", "checkBalance"]:
+                    await asyncio.sleep(0.5)
+
+                elif task == "update":
+                    try:
+                        branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode().strip()
+                        local_commit = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+                        subprocess.run(["git", "fetch", "origin"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        remote_commit = subprocess.check_output(["git", "rev-parse", f"origin/{branch}"]).decode().strip()
+                        if local_commit != remote_commit:
+                            subprocess.run(["git", "pull", "origin", branch], check=True)
+                    except:
+                        pass
+
+            except Exception as e:
+                all_states[task_key]["msg"] = f"{task}: ERROR {e}"
+                task_results["fail"] += 1
+            finally:
+                all_states[task_key]["done"] = True
+
+        return results
+
+
+# ---------------- MAIN ----------------
+async def main_limited(base_url, tasks_selected, accounts_list=None, num_accounts=None, max_concurrent=1, proxies=None, file_name=None):
+    semaphore = asyncio.Semaphore(max_concurrent)
+    tasks = []
+
+    if accounts_list:
+        usernames = [acc["username"] for acc in accounts_list[:num_accounts]]
+    else:
+        usernames = [random_number() for _ in range(num_accounts)]
+
+    for username in usernames:
+        tasks.append(asyncio.create_task(worker(semaphore, base_url, username, proxies, tasks_selected, file_name)))
+
+    spinner_coro = asyncio.create_task(spinner_task(all_states))
+    try:
+        results = await asyncio.gather(*tasks)
+    finally:
+        if not spinner_coro.done():
+            spinner_coro.cancel()
+            try:
+                await spinner_coro
+            except asyncio.CancelledError:
+                pass
+
+    return results
+
+# ---------------- PROMPT ----------------
+def prompt_file(folder_path="./data/accounts", extensions=None):
+    extensions = extensions or [".txt", ".json"]
+    folder = Path(folder_path)
+    files = [f.name for f in folder.iterdir() if f.is_file() and f.suffix in extensions]
+    if not files: return None
+    selected = questionary.select("Pilih file:", choices=files).ask()
+    return folder / selected
 
 def prompt_base_url():
     items = read_file()
     if items:
-        selected = questionary.select(
-            "baseUrl?",
-            choices=items
-        ).ask()
-        return selected
-
-def prompt_account_creation():
-    return int(questionary.text(
-        "How many accounts do you want to create?",
-        validate=lambda val: True if val.isdigit() and int(val) > 0 else "Enter at least 1"
-    ).ask())
+        return questionary.select("baseUrl?", choices=items).ask()
 
 def prompt_use_proxy():
     return questionary.confirm("Use proxy?", default=True).ask()
 
-def prompt_thread_count(max_allowed):
-    return int(questionary.text(
-        f"How many threads do you want to run? (Max {max_allowed})",
-        validate=lambda val: (
-            True if val.isdigit() and 0 < int(val) <= max_allowed else f"Enter 1-{max_allowed}"
-        )
-    ).ask())
-
 def prompt_tasks():
     selected_labels = questionary.checkbox(
         "Tasks?",
-        choices=[q["label"] for q in TASK_OPTIONS],
-        validate=lambda val: True if len(val) > 0 else "You must select at least one task"
+        choices=[q["label"] for q in [
+            {"id": "register", "label": "Create Accounts"},
+            {"id": "claimBonus", "label": "Claim Bonus"},
+            {"id": "getFreeBalance", "label": "Get Free Balance"},
+            {"id": "checkBalance", "label": "Check Balance"},
+            {"id": "update", "label": "Update Script"},
+        ]],
+        validate=lambda val: True if len(val) > 0 else "Select at least one task"
     ).ask()
-    selected_ids = [q["id"] for q in TASK_OPTIONS if q["label"] in selected_labels]
-    return selected_ids
+    mapping = {"Create Accounts":"register","Claim Bonus":"claimBonus","Get Free Balance":"getFreeBalance","Check Balance":"checkBalance","Update Script":"update"}
+    return [mapping[l] for l in selected_labels]
 
-async def worker(semaphore, base_url, username, proxies, tasks_selected, line):
-    async with semaphore:
-        proxy = random.choice(proxies) if proxies else ""
-        state_event = {"msg": "waiting...", "done": False}
-        spinner = asyncio.create_task(spinner_task(line, username, state_event))
+def prompt_num_accounts(max_allowed):
+    return int(questionary.text(
+        f"How many accounts? (1-{max_allowed})",
+        validate=lambda val: True if val.isdigit() and 1 <= int(val) <= max_allowed else f"Enter 1-{max_allowed}"
+    ).ask())
 
-        results = {}
+def prompt_max_concurrent(max_allowed):
+    return int(questionary.text(
+        f"How many concurrent workers? (1-{max_allowed})",
+        validate=lambda val: True if val.isdigit() and 1 <= int(val) <= max_allowed else f"Enter 1-{max_allowed}"
+    ).ask())
 
-        # Loop per task yang dipilih
-        for task in tasks_selected:
-            if task == "register":
-                state_event["msg"] = "Registering..."
-                auth_result = await do_auth(base_url, username, username, "register", proxy)
-                results["register"] = auth_result
-                state_event["msg"] = f"createAccount: {auth_result.get('message','')}"
-                await asyncio.sleep(0.2)
-
-            elif task == "getFreeBalance":
-                state_event["msg"] = "Getting Free Balance..."
-                filename = sanitize_filename(base_url)
-                accounts_list = load_json(filename)
-                total_accounts = len(accounts_list)
-                idx = line - 11
-                if idx < len(accounts_list):
-                    sid = accounts_list[idx]["sid"]
-                    username_acc = accounts_list[idx]["username"]
-                    next_roulette_str = accounts_list[idx].get("next_roulette", "")
-                    run_task = True
-
-                    if next_roulette_str:
-                        try:
-                            from datetime import datetime
-                            next_dt = datetime.strptime(next_roulette_str, "%Y-%m-%d")
-                            today = datetime.today()
-                            if today < next_dt:
-                                run_task = False
-                                state_event["msg"] = f"FreeBalance: Next spin {next_roulette_str}"
-                        except:
-                            pass
-
-                    if run_task:
-                        try:
-                            balance_result = await run_get_free_balance_async(sid, username_acc, base_url)
-                            results["getFreeBalance"] = balance_result
-                            state_event["msg"] = f"FreeBalance: {balance_result.get('message','')}"
-                        except Exception as e:
-                            state_event["msg"] = f"FreeBalance Error: {e}"
-                else:
-                    state_event["msg"] = "No SID available for FreeBalance"
-
-
-            elif task == "claimBonus":
-                state_event["msg"] = "Claiming Bonus..."
-                # TODO: jalankan fungsi claim bonus async
-                await asyncio.sleep(0.5)
-                state_event["msg"] = "Bonus claimed (dummy)"
-
-            elif task == "checkBalance":
-                state_event["msg"] = "Checking Balance..."
-                # TODO: jalankan fungsi check balance async
-                await asyncio.sleep(0.5)
-                state_event["msg"] = "Balance checked (dummy)"
-
-            elif task == "update":
-                state_event["msg"] = "Checking for update..."
-                try:
-                    # Ambil branch saat ini
-                    branch = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode().strip()
-                    # Ambil commit lokal & remote
-                    local_commit = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
-                    subprocess.run(["git", "fetch", "origin"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    remote_commit = subprocess.check_output(["git", "rev-parse", f"origin/{branch}"]).decode().strip()
-                    remote_msg = subprocess.check_output(["git", "log", "-1", "--pretty=%B", f"origin/{branch}"]).decode().strip()
-
-                    if local_commit == remote_commit:
-                        state_event["msg"] = f"Script sudah terbaru (Branch: {branch}, Commit: {local_commit[:7]})"
-                    else:
-                        state_event["msg"] = f"Update tersedia! Mengambil update..."
-                        subprocess.run(["git", "pull", "origin", branch], check=True)
-                        state_event["msg"] = f"Update selesai! Commit terakhir: {remote_commit[:7]} - {remote_msg}"
-                except Exception as e:
-                    state_event["msg"] = f"Update gagal: {e}"
-
-        state_event["done"] = True
-        await spinner
-        return results
-
-
-async def main_limited(base_url, tasks_selected, total_accounts=10, max_concurrent=2, proxies=None):
-    semaphore = asyncio.Semaphore(max_concurrent)
-    print("\n" * 10)
-    sys.stdout.flush()
-    start_line = 11
-    tasks = []
-    for i in range(total_accounts):
-        if "getFreeBalance" in tasks_selected and accounts_list:
-            account_data = accounts_list[i]
-            username = account_data["username"]
-        else:
-            username = random_number()
-        line = start_line + i
-        tasks.append(
-            asyncio.create_task(
-                worker(semaphore, base_url, username, r_proxies, p_tasks, line)
-            )
-        )
-
-    results = await asyncio.gather(*tasks)
-    total_success = sum(r.get("register", {}).get("success",0) for r in results)
-    total_fail = sum(r.get("register", {}).get("fail",0) for r in results)
-
-
-    info_line = start_line + total_accounts + 1
-    print(f"\033[{info_line};0H==========TASK INFO==========")
-    print(f"\033[{info_line+1};0HSuccess: {total_success} | Failed: {total_fail}")
-    print(f"\033[{info_line+2};0H=============================")
-
-
-
+# ---------------- ENTRY ----------------
 if __name__ == "__main__":
     check_latest_version()
     base_url = prompt_base_url()
-    p_tasks = prompt_tasks()
-    p_proxy = prompt_use_proxy()
-    r_proxies = []
+    tasks_selected = prompt_tasks()
+    use_proxy = prompt_use_proxy()
+    proxies = read_proxies() if use_proxy else []
 
-    if p_proxy:
-        proxies = read_proxies()
-        if not proxies:
-            print("No proxies found. Proceeding without proxies.")
+    accounts_list = None
+    max_allowed = None
+    file_path = None
+
+    # Jika task getFreeBalance dipilih, minta user pilih file
+    if "getFreeBalance" in tasks_selected:
+        file_path = prompt_file("./data/accounts", extensions=[".json", ".txt"])
+        if file_path is None:
+            print("Tidak ada file tersedia, keluar...")
+            exit(1)
+
+        # Load accounts dari file
+        if file_path.suffix == ".json":
+            accounts_list = load_json(file_path)
         else:
-            r_proxies.extend(proxies)
-            print(f"{len(r_proxies)} proxies loaded.")
+            # txt -> konversi ke json & simpan permanen
+            accounts_list = txt_to_json_accounts(file_path)
+            json_file = file_path.with_suffix(".json")
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(accounts_list, f, indent=4)
+            print(f"File TXT dikonversi ke JSON dan disimpan: {json_file}")
 
-    p_acc_creations = 1  # default minimal 1 account
-    p_thread_count = 1   # default 1 thread
+        max_allowed = len(accounts_list)
+    else:
+        max_allowed = 1000000  # practically unlimited jika tidak ada akun list
 
-    if "register" in p_tasks:
-        p_acc_creations = prompt_account_creation()
-        p_thread_count = prompt_thread_count(max_allowed=p_acc_creations)
-    elif "getFreeBalance" in p_tasks:
-        filename = sanitize_filename(base_url)
-        accounts_list = load_json(filename)
-        total_accounts = len(accounts_list)
-        p_acc_creations = total_accounts
-        p_thread_count = prompt_thread_count(max_allowed=total_accounts)
+    num_accounts = prompt_num_accounts(max_allowed)
+    max_concurrent = prompt_max_concurrent(num_accounts)
 
-    asyncio.run(
-        main_limited(
-            base_url,
-            tasks_selected=p_tasks,
-            total_accounts=p_acc_creations,
-            max_concurrent=p_thread_count,
-            proxies=r_proxies,
-        )
-    )
+    asyncio.run(main_limited(base_url, tasks_selected, accounts_list, num_accounts=num_accounts, max_concurrent=max_concurrent, proxies=proxies, file_name=file_path))

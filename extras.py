@@ -8,7 +8,7 @@ from datetime import datetime
 
 import subprocess
 
-FILENAME = "baseurl.txt"
+FILENAME = "data/baseurl.txt"
 
 # --- Fungsi CRUD ---
 def read_file():
@@ -107,7 +107,7 @@ def random_number():
 def sanitize_filename(s):
     domain = re.sub(r'^https?://(www\.)?', '', s)  # hilang https:// dan www.
     domain = domain.split(".")[0]  # ambil bagian sebelum titik pertama
-    return f"account({domain}).json"
+    return f"data/accounts/account({domain}).json"
 
 def time_format(next_time_ms):
     try:
@@ -133,6 +133,11 @@ def check_latest_version():
 
     except Exception as e:
         print(f"⚠️ Tidak bisa cek versi: {e}")
+
+def txt_to_json_accounts(txt_path):
+    usernames = [line.strip() for line in txt_path.read_text().splitlines() if line.strip()]
+    return [{"username": u, "sid": "", "uuid": "", "next_roulette": ""} for u in usernames]
+
         
 
 # --- Prompt interaktif ---
