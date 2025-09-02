@@ -4,7 +4,7 @@ import random
 import itertools
 import subprocess
 from pathlib import Path
-from src.tasks import do_auth, run_get_free_balance_async, run_check_balance_async, run_claim_bonus_async
+from tasks import do_auth, run_get_free_balance_async, run_check_balance_async, run_claim_bonus_async
 from extras import read_file, read_proxies, random_number, load_json, check_latest_version, txt_to_json_accounts
 from rich.console import Console
 from rich.live import Live
