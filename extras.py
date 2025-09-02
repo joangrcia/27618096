@@ -42,7 +42,7 @@ def delete_item(index):
         return removed
     return None
 
-def read_proxies(file_path="proxies.txt"):
+def read_proxies(file_path="data/proxies.txt"):
     with open(file_path, "r") as f:
         return [line.strip() for line in f if line.strip()]
     
