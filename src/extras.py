@@ -42,6 +42,24 @@ def delete_item(index):
         return removed
     return None
 
+def write_json(file_path, data):
+    file = Path(file_path)
+
+    if not file.exists():
+        with open(file, "w", encoding="utf-8") as f:
+            json.dump([], f, indent=4)
+
+    with open(file, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+def append_line(file_path: str, text: str):
+    if not os.path.exists(file_path):
+        with open(file_path, "w", encoding="utf-8") as f:
+            pass
+
+    with open(file_path, "a", encoding="utf-8") as f:
+        f.write(text + "\n")
+
 def read_proxies(file_path="data/proxies.txt"):
     with open(file_path, "r") as f:
         return [line.strip() for line in f if line.strip()]

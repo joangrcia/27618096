@@ -2,7 +2,7 @@ import asyncio
 import httpx
 from httpx_socks import AsyncProxyTransport
 from playwright.async_api import async_playwright
-from extras import append_json, sanitize_filename, time_format, update_next_roulette
+from extras import append_json, sanitize_filename, time_format, update_next_roulette, append_line, write_json
 
 MAX_RETRIES = 3
 
@@ -29,128 +29,157 @@ async def safe_goto(page, username, url, retries=3, delay=2, update_state=None, 
     await update_state(f"[{username}] createAccount: [FAIL] Gagal load {url} setelah {retries} percobaan....")
     return None
 
+async def launch_browser(p, proxy, username, update_state):
+    if proxy:
+        proxy_parts = proxy.split("@")
+        creds, server = proxy_parts[0], proxy_parts[1]
+        username_proxy, password_proxy = creds.split(":")
+        await update_state(f"[{username}] createAccount: Starting Browser dengan proxy {server}....")
+        return await p.chromium.launch(
+            headless=False, 
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-gpu",
+                "--window-size=1280,800",
+            ],
+            proxy={
+                "server": f"http://{server}",
+                "username": username_proxy,
+                "password": password_proxy,
+            }, 
+        )
+    else:
+        return await p.chromium.launch(
+            headless=True, 
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-gpu",
+                "--window-size=1280,800",
+            ],
+        )
+
+
 # ---------------- DO AUTH ----------------
 async def do_auth(baseUrl, username, password, mode="login", proxy="", update_state=None, file_name=None):
-    done_event = asyncio.Event()
+    result = {"sid": None, "uuid": None}
+    counters = {"success": 0, "fail": 0}
 
-    async def task():
-        async with async_playwright() as p:
-            if proxy != "":
-                proxy_parts = proxy.split("@")
-                creds, server = proxy_parts[0], proxy_parts[1]
-                username_proxy, password_proxy = creds.split(":")
-                await update_state(f"[{username}] createAccount: Starting Browser....")
-                browser = await p.chromium.launch(
-                    headless=True, 
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-dev-shm-usage",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                    ],
-                    proxy={
-                        "server": f"http://{server}",
-                        "username": username_proxy,
-                        "password": password_proxy,
-                    }, 
+    for attempt in range(1, 3 + 1):
+        try:
+            async with async_playwright() as p:
+                browser = await launch_browser(p, proxy, username, update_state)
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+                    viewport={"width": 200, "height": 200}
                 )
-            else:
-                browser = await p.chromium.launch(
-                    headless=True, 
-                    args=["--disable-blink-features=AutomationControlled"],
-                )
-            context = await browser.new_context()
+                await context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                    });
+                    """)
 
-            await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image","font","media"] else route.continue_())
+                await context.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image","font","media"] else route.continue_())
+                page = await context.new_page()
 
-            page = await context.new_page()
-
-            result = {"sid": None, "uuid": None}
-            counters = {"success": 0, "fail": 0}
-
-            async def handle_response(response):
-                url = response.url
-                try:
-                    if response.status < 300 or response.status >= 400:
-                        data = await response.json()
-                    else:
+                # attach response handler sebelum goto
+                async def handle_response(response):
+                    url = response.url
+                    try:
+                        if response.status < 300 or response.status >= 400:
+                            data = await response.json()
+                        else:
+                            data = {}
+                    except:
                         data = {}
-                except:
-                    data = {}
 
-                # Login handler
-                if "passport/login.html" in url and response.request.method == "POST":
-                    headers = response.headers
-                    login_message = data.get("message") if data else None
-                    result["sid"] = headers.get("sid")
-                    result["uuid"] = headers.get("uuid")
-                    results = {"username": username, "sid": result["sid"], "uuid": result["uuid"], "next_roulette": ""}
-                    if file_name:
-                        append_json(results, file_name)
-                    else:
-                        fileName = sanitize_filename(baseUrl)
-                        append_json(results, fileName)
+                    if "passport/login.html" in url and response.request.method == "POST":
+                        headers = response.headers
+                        login_message = data.get("message") if data else None
+                        result["sid"] = headers.get("sid")
+                        result["uuid"] = headers.get("uuid")
+                        results = [{"username": username, "sid": result["sid"], "uuid": result["uuid"], "next_roulette": ""}]
+                        write_json("./data/session.json", results)
 
-                    if not login_message:
-                        await update_state(f"[{username}] createAccount: Login Successful.....")
-                    else:
-                        await update_state(f"[{username}] createAccount: {login_message}")
+                        if not login_message:
+                            await update_state(f"[{username}] createAccount: Login Successful..... {result['sid']}")
+                        else:
+                            await update_state(f"[{username}] createAccount: {login_message}")
 
-                    if data.get("code") == "200":
-                        counters["success"] += 1
-                    else:
-                        counters["fail"] += 1
+                        if data.get("code") == "200":
+                            counters["success"] += 1
+                        else:
+                            counters["fail"] += 1
 
-                # Register handler
-                elif "/player-api/register" in url and response.request.method == "POST":
-                    register_message = data.get("message") if data else None
-                    if register_message:
-                        await update_state(f"[{username}] createAccount: {register_message}")
-                    if data.get("code") == "200":
-                        await update_state(f"[{username}] createAccount: Register Successful....")
-                        counters["success"] += 0
-                    else:
-                        counters["fail"] += 1
+                    elif "/player-api/register" in url and response.request.method == "POST":
+                        register_message = data.get("message") if data else None
+                        if register_message:
+                            await update_state(f"[{username}] createAccount: {register_message}")
+                        if data.get("code") == "200":
+                            append_line("data/seasons.txt", username)
+                            await update_state(f"[{username}] createAccount: Register Successful....")
+                            # counters["success"] += 1
+                        else:
+                            # counters["fail"] += 1
+                            pass
 
-            page.on("response", handle_response)
+                page.on("response", handle_response)
 
-            resp = await safe_goto(page, username, f"{baseUrl}/account", timeout=60000, wait_until="load", update_state=update_state)
-            if not resp:
-                counters["fail"] += 1
+                # pakai safe_goto tanpa retry
+                resp = await safe_goto(page, username, f"{baseUrl}/account", retries=1, update_state=update_state, timeout=60000, wait_until="domcontentloaded")
+                if not resp:
+                    await update_state(f"[{username}] Attempt {attempt}: gagal load, close browser....")
+                    # counters["fail"] += 1
+                    await browser.close()
+                    await asyncio.sleep(2)
+                    continue
+
+                await page.wait_for_timeout(3000)
+
+                if mode == "login":
+                    await update_state(f"[{username}] createAccount: Login....")
+                    await page.click("div.button-un-highlight:has-text('Login')")
+                    await page.wait_for_selector("input[type='text']", timeout=10000)
+                    await page.fill("input[type='text']", username)
+                    await page.fill("input[type='password']", password)
+                    login_btn = page.locator("div.button-un-highlight.bg-gradient-to-b:has-text('Login')")
+                    await login_btn.wait_for(state="visible", timeout=10000)
+                    await login_btn.click()
+
+                elif mode == "register":
+                    await update_state(f"[{username}] createAccount: Register....")
+                    await page.click("div.button-un-highlight:has-text('Daftar')")
+                    await page.wait_for_selector("input[type='text']", timeout=10000)
+                    await page.fill("input[type='text']", username)
+                    await page.locator("input[type=password]").nth(0).fill(password)
+                    await page.locator("input[type=password]").nth(1).fill(password)
+                    register_btn = page.locator("div.button-un-highlight.bg-gradient-to-b:has-text('Daftar')").nth(1)
+                    await register_btn.wait_for(state="visible", timeout=10000)
+                    await register_btn.click()
+
+                await page.wait_for_timeout(3000)
                 await browser.close()
-                done_event.set()
+
+                # kalau sukses, break loop
                 return counters
-            
-            await page.wait_for_timeout(3000)
 
-            if mode == "login":
-                await update_state(f"[{username}] createAccount: Login....")
-                await page.click("div.button-un-highlight:has-text('Login')")
-                await page.wait_for_selector("input[type='text']", timeout=10000)
-                await page.fill("input[type='text']", username)
-                await page.fill("input[type='password']", password)
-                login_btn = page.locator("div.button-un-highlight.bg-gradient-to-b:has-text('Login')")
-                await login_btn.wait_for(state="visible", timeout=10000)
-                await login_btn.click()
+        except Exception as e:
+            await update_state(f"[{username}] Attempt {attempt} error: {e}, retry dengan browser baru....")
+            # counters["fail"] += 1
+            try:
+                await browser.close()
+            except:
+                pass
+            await asyncio.sleep(2)
+            continue
 
-            elif mode == "register":
-                await update_state(f"[{username}] createAccount: Register....")
-                await page.click("div.button-un-highlight:has-text('Daftar')")
-                await page.wait_for_selector("input[type='text']", timeout=10000)
-                await page.fill("input[type='text']", username)
-                await page.locator("input[type=password]").nth(0).fill(password)
-                await page.locator("input[type=password]").nth(1).fill(password)
-                register_btn = page.locator("div.button-un-highlight.bg-gradient-to-b:has-text('Daftar')").nth(1)
-                await register_btn.wait_for(state="visible", timeout=10000)
-                await register_btn.click()
-
-            await page.wait_for_timeout(3000)
-            await browser.close()
-            done_event.set()
-            return counters
-
-    auth_result = await task()
-    return auth_result
+    await update_state(f"[{username}] Gagal setelah 3 kali coba.")
+    return counters
 
 # ---------------- GET FREE BALANCE ----------------
 async def run_get_free_balance_async(sid: str, account: str, base_url: str, update_state=None, proxy_url: str = None):
@@ -170,7 +199,7 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
         detail_payload = {"activityId": "1335ce1c-26c7-4635-8ab3-c6b52c1419b2::vip_wheel"}
         detail_headers = {"sid": sid, "referer": f"{base_url}/sales-promotion/turntable/1335ce1c-26c7-4635-8ab3-c6b52c1419b2::vip_wheel"}
 
-        for attempt in range(3):
+        for attempt in range(5):
             try:
                 if update_state:
                     await update_state(f"[{account}] getFreeBalance: Fetching roulette details attempt {attempt+1}...")
@@ -182,7 +211,8 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                 break
             except Exception as e:
                 if update_state:
-                    await update_state(f"[{account}] getFreeBalance: Attempt {attempt+1} failed: {e}")
+                    err_type = type(e).__name__  # contoh: 'TimeoutException', 'HTTPStatusError'
+                    await update_state(f"[{account}] getFreeBalance: Attempt {attempt+1} failed: {err_type}")
                 await asyncio.sleep(2)
 
         if roulette_detail is None:

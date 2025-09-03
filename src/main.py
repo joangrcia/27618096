@@ -66,88 +66,91 @@ async def worker(semaphore, base_url, username, proxies, tasks_selected, file_na
 
                 elif task == "getFreeBalance":
                     all_states[task_key]["msg"] = f"{task}: Preparing Free Balance..."
-                    idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
-                    if idx is None:
-                        all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
-                        continue
 
-                    sid = accounts_list[idx].get("sid")
-                    if not sid:
-                        all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
-                        auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
-                        sid = None
-                        if auth_result.get("success", 0) > 0 and file_name:
-                            accounts_json = load_json(file_name)
-                            for acc in accounts_json:
-                                if acc["username"] == username:
-                                    sid = acc.get("sid")
-                                    accounts_list[idx]["sid"] = sid
-                                    break
-                        else:
-                            all_states[task_key]["msg"] = f"{task}: Login gagal, skip Free Balance"
-                            task_results["fail"] += 1
-                            continue
+                    # langsung login pakai username + password sama (atau kamu bisa bedain kalau perlu)
+                    auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name=None)
 
-                    proxy_url = f"http://{proxy}" if proxy else None
-                    balance_result = await run_get_free_balance_async(sid, username, base_url, update_state, proxy_url)
-                    results["getFreeBalance"] = balance_result
-
-                elif task == "claimBonus":
-                    all_states[task_key]["msg"] = f"{task}: Claiming bonus..."
-                    # Cari akun
-                    idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
-                    if idx is None:
-                        all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
-                        task_results["fail"] += 1
-                        continue
-
-                    sid = accounts_list[idx].get("sid")
-                    # Kalau SID kosong, login dulu
-                    if not sid:
-                        all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
-                        auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
-                        sid = None
-                        if auth_result.get("success", 0) > 0:
-                            if file_name:
-                                accounts_json = load_json(file_name)
-                                for acc in accounts_json:
-                                    if acc["username"] == username:
+                    session_file = Path("./data/session.json")
+                    sid = None
+                    if session_file.exists():
+                        try:
+                            with open(session_file, "r", encoding="utf-8") as f:
+                                sessions = json.load(f)
+                            if isinstance(sessions, list):
+                                for acc in sessions:
+                                    if acc.get("username") == username:
                                         sid = acc.get("sid")
-                                        accounts_list[idx]["sid"] = sid
                                         break
-                        else:
-                            all_states[task_key]["msg"] = f"{task}: Login gagal, skip claimBonus"
-                            task_results["fail"] += 1
-                            continue
+                        except:
+                            sid = None
 
-                    proxy_url = f"http://{proxy}" if proxy else None
-                    claim_result = await run_claim_bonus_async(sid, username, base_url, update_state=update_state, proxy_url=proxy_url)
-                    results["claimBonus"] = claim_result
-
-                elif task == "checkBalance":
-                    all_states[task_key]["msg"] = f"{task}: Checking balance..."
-                    idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
-                    if idx is None:
-                        all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
+                    if sid:
+                        proxy_url = f"http://{proxy}" if proxy else None
+                        balance_result = await run_get_free_balance_async(sid, username, base_url, update_state, proxy_url)
+                        results["getFreeBalance"] = balance_result
+                        task_results["success"] += 1
+                    else:
+                        all_states[task_key]["msg"] = f"{task}: SID tidak ditemukan di session.json"
                         task_results["fail"] += 1
-                        continue
 
-                    sid = accounts_list[idx].get("sid")
-                    if not sid:
-                        all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
-                        auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
-                        sid = None
-                        if auth_result.get("success", 0) > 0 and file_name:
-                            accounts_json = load_json(file_name)
-                            for acc in accounts_json:
-                                if acc["username"] == username:
-                                    sid = acc.get("sid")
-                                    accounts_list[idx]["sid"] = sid
-                                    break
-                        else:
-                            all_states[task_key]["msg"] = f"{task}: Login gagal, skip checkBalance"
-                            task_results["fail"] += 1
-                            continue
+
+
+                # elif task == "claimBonus":
+                #     all_states[task_key]["msg"] = f"{task}: Claiming bonus..."
+                #     # Cari akun
+                #     idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
+                #     if idx is None:
+                #         all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
+                #         task_results["fail"] += 1
+                #         continue
+
+                #     sid = accounts_list[idx].get("sid")
+                #     # Kalau SID kosong, login dulu
+                #     if not sid:
+                #         all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
+                #         auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
+                #         sid = None
+                #         if auth_result.get("success", 0) > 0:
+                #             if file_name:
+                #                 accounts_json = load_json(file_name)
+                #                 for acc in accounts_json:
+                #                     if acc["username"] == username:
+                #                         sid = acc.get("sid")
+                #                         accounts_list[idx]["sid"] = sid
+                #                         break
+                #         else:
+                #             all_states[task_key]["msg"] = f"{task}: Login gagal, skip claimBonus"
+                #             task_results["fail"] += 1
+                #             continue
+
+                #     proxy_url = f"http://{proxy}" if proxy else None
+                #     claim_result = await run_claim_bonus_async(sid, username, base_url, update_state=update_state, proxy_url=proxy_url)
+                #     results["claimBonus"] = claim_result
+
+                # elif task == "checkBalance":
+                #     all_states[task_key]["msg"] = f"{task}: Checking balance..."
+                #     idx = next((i for i, a in enumerate(accounts_list) if a["username"] == username), None)
+                #     if idx is None:
+                #         all_states[task_key]["msg"] = f"{task}: Username tidak ditemukan..."
+                #         task_results["fail"] += 1
+                #         continue
+
+                #     sid = accounts_list[idx].get("sid")
+                #     if not sid:
+                #         all_states[task_key]["msg"] = f"{task}: SID kosong, login dulu..."
+                #         auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name)
+                #         sid = None
+                #         if auth_result.get("success", 0) > 0 and file_name:
+                #             accounts_json = load_json(file_name)
+                #             for acc in accounts_json:
+                #                 if acc["username"] == username:
+                #                     sid = acc.get("sid")
+                #                     accounts_list[idx]["sid"] = sid
+                #                     break
+                #         else:
+                #             all_states[task_key]["msg"] = f"{task}: Login gagal, skip checkBalance"
+                #             task_results["fail"] += 1
+                #             continue
 
                     proxy_url = f"http://{proxy}" if proxy else None
                     balance_result = await run_check_balance_async(
@@ -225,9 +228,9 @@ def prompt_tasks():
         "Tasks?",
         choices=[q["label"] for q in [
             {"id": "register", "label": "Create Accounts"},
-            {"id": "claimBonus", "label": "Claim Bonus"},
+            # {"id": "claimBonus", "label": "Claim Bonus"},
             {"id": "getFreeBalance", "label": "Get Free Balance"},
-            {"id": "checkBalance", "label": "Check Balance"},
+            # {"id": "checkBalance", "label": "Check Balance"},
             {"id": "update", "label": "Update Script"},
         ]],
         validate=lambda val: True if len(val) > 0 else "Select at least one task"
