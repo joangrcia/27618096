@@ -44,7 +44,7 @@ async def launch_browser(p, proxy, username, update_state):
         username_proxy, password_proxy = creds.split(":")
         await update_state(f"[{username}] createAccount: Starting Browser....")
         return await p.chromium.launch(
-            headless=False, 
+            headless=True, 
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
@@ -197,7 +197,6 @@ async def do_auth(baseUrl, username, password, mode="login", proxy="", update_st
     await update_state(f"[{username}] Failed after 3 attempt.")
     return counters
 
-# ---------------- GET FREE BALANCE ----------------
 # ---------------- GET FREE BALANCE ----------------
 async def run_get_free_balance_async(sid: str, account: str, base_url: str, update_state=None, proxy_url: str = None):
     result = {"account": account, "message": "", "roulette": None}
