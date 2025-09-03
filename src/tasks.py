@@ -202,6 +202,8 @@ async def do_auth(baseUrl, username, password, mode="login", proxy="", update_st
 async def run_get_free_balance_async(sid: str, account: str, base_url: str, update_state=None, proxy_url: str = None):
     result = {"account": account, "message": "", "roulette": None}
 
+    failed_result = None
+
     if not sid:
         if update_state:
             await update_state(f"[{account}] getFreeBalance: SID tidak tersedia, login dulu...")
@@ -228,13 +230,13 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                 break
             except Exception as e:
                 if update_state:
-                    err_type = type(e).__name__  # contoh: 'TimeoutException', 'HTTPStatusError'
-                    await update_state(f"[{account}] getFreeBalance: Attempt {attempt+1} failed: {err_type}")
+                    failed_result = err_type = type(e).__name__  # contoh: 'TimeoutException', 'HTTPStatusError'
+                    await update_state(f"[{account}] getFreeBalance: Attempt {attempt+1} failed: {failed_result}")
                 await asyncio.sleep(2)
 
         if roulette_detail is None:
             if update_state:
-                await update_state(f"[{account}] getFreeBalance: Failed to fetch roulette details")
+                await update_state(f"[{account}] getFreeBalance: Failed to fetch roulette details [ANTIBOT]")
             return result
 
         try:
@@ -276,8 +278,9 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                                 await update_state(f"[{account}] getFreeBalance: Spin #{i+1} success")
                             break
                         except Exception as e:
+                            failed_result = err_type = type(e).__name__
                             if update_state:
-                                await update_state(f"[{account}] getFreeBalance: Spin #{i+1} attempt {attempt+1} failed: {e}")
+                                await update_state(f"[{account}] getFreeBalance: Spin #{i+1} attempt {attempt+1} failed: {failed_result}")
                             await asyncio.sleep(2)
 
                     if draw_data is None:
@@ -292,7 +295,7 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                         await update_state(f"[{account}] getFreeBalance: Spin #{i+1} got {prize_type}: {prize_amount}")
 
                     if i < times - 1:
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(5)
 
                 if update_state:
                     prize_summary = ", ".join([f"{k}: {v}" for p in prizes for k, v in p.items()])
@@ -303,8 +306,9 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                     await update_state(f"[{account}] getFreeBalance: Next spin at {time_format(result['roulette'])}")
 
         except Exception as e:
+            failed_result = err_type = type(e).__name__
             if update_state:
-                await update_state(f"[{account}] getFreeBalance: Unexpected error: {e}")
+                await update_state(f"[{account}] getFreeBalance: Unexpected error: {failed_result}")
 
     return result
 
