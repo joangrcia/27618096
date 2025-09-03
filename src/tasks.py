@@ -237,6 +237,7 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
         if roulette_detail is None:
             if update_state:
                 await update_state(f"[{account}] getFreeBalance: Failed to fetch roulette details [ANTIBOT]")
+                append_line("data/output/getfreebalance/failed.txt", f"[{account}] getFreeBalance: Failed to fetch roulette details [ANTIBOT]")
             return result
 
         try:
@@ -250,6 +251,7 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
             if not number_of_draws:
                 if update_state:
                     await update_state(f"[{account}] getFreeBalance: No draws available")
+                    append_line("data/output/getfreebalance/failed.txt", f"[{account}] getFreeBalance: No draws available")
                 return result
 
             times = number_of_draws.get("times", 0)
@@ -280,12 +282,13 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                         except Exception as e:
                             failed_result = err_type = type(e).__name__
                             if update_state:
-                                await update_state(f"[{account}] getFreeBalance: Spin #{i+1} attempt {attempt+1} failed: {failed_result}")
+                                await update_state(f"[{account}] getFreeBalance: Spin #{i+1} attempt {attempt+1} failed: [ANTIBOT]")
                             await asyncio.sleep(2)
 
                     if draw_data is None:
                         if update_state:
-                            await update_state(f"[{account}] getFreeBalance: Spin #{i+1} failed")
+                            await update_state(f"[{account}] getFreeBalance: Spin #{i+1} failed [ANTIBOT]")
+                            append_line("data/output/getfreebalance/failed.txt", f"[{account}] getFreeBalance: Spin #{i+1} failed [ANTIBOT]")
                         return result
 
                     prize_type = draw_data.get("data", {}).get("type")
