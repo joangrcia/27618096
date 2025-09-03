@@ -11,10 +11,10 @@ import subprocess
 FILENAME = "data/baseurl.txt"
 
 # --- Fungsi CRUD ---
-def read_file():
-    if not os.path.exists(FILENAME):
+def read_file(file_name=FILENAME):
+    if not os.path.exists(file_name):
         return []
-    with open(FILENAME, "r", encoding="utf-8") as f:
+    with open(file_name, "r", encoding="utf-8") as f:
         return [line.strip() for line in f.readlines()]
 
 def write_file(lines):

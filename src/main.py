@@ -70,19 +70,22 @@ async def worker(semaphore, base_url, username, proxies, tasks_selected, file_na
                     # langsung login pakai username + password sama (atau kamu bisa bedain kalau perlu)
                     auth_result = await do_auth(base_url, username, username, "login", proxy, update_state, file_name=None)
 
-                    session_file = Path("./data/session.json")
-                    sid = None
-                    if session_file.exists():
-                        try:
-                            with open(session_file, "r", encoding="utf-8") as f:
-                                sessions = json.load(f)
-                            if isinstance(sessions, list):
-                                for acc in sessions:
-                                    if acc.get("username") == username:
-                                        sid = acc.get("sid")
-                                        break
-                        except:
-                            sid = None
+                    # session_file = Path("./data/session.json")
+                    # sid = None
+                    # if session_file.exists():
+                    #     try:
+                    #         with open(session_file, "r", encoding="utf-8") as f:
+                    #             sessions = json.load(f)
+                    #         if isinstance(sessions, list):
+                    #             for acc in sessions:
+                    #                 if acc.get("username") == username:
+                    #                     sid = acc.get("sid")
+                    #                     break
+                    #     except:
+                    #         sid = None
+
+                    sid_dict = auth_result.get("sid")
+                    sid = sid_dict.get("sid") if isinstance(sid_dict, dict) else sid_dict
 
                     if sid:
                         proxy_url = f"http://{proxy}" if proxy else None
@@ -90,7 +93,7 @@ async def worker(semaphore, base_url, username, proxies, tasks_selected, file_na
                         results["getFreeBalance"] = balance_result
                         task_results["success"] += 1
                     else:
-                        all_states[task_key]["msg"] = f"{task}: SID tidak ditemukan di session.json"
+                        all_states[task_key]["msg"] = f"{task}: SID not found"
                         task_results["fail"] += 1
 
 
@@ -152,14 +155,14 @@ async def worker(semaphore, base_url, username, proxies, tasks_selected, file_na
                 #             task_results["fail"] += 1
                 #             continue
 
-                    proxy_url = f"http://{proxy}" if proxy else None
-                    balance_result = await run_check_balance_async(
-                        sid, username, base_url,
-                        balance_threshold=balance_threshold,
-                        update_state=update_state,
-                        proxy_url=proxy_url
-                    )
-                    results["checkBalance"] = balance_result
+                    # proxy_url = f"http://{proxy}" if proxy else None
+                    # balance_result = await run_check_balance_async(
+                    #     sid, username, base_url,
+                    #     balance_threshold=balance_threshold,
+                    #     update_state=update_state,
+                    #     proxy_url=proxy_url
+                    # )
+                    # results["checkBalance"] = balance_result
 
                 elif task == "update":
                     try:
@@ -186,7 +189,7 @@ async def main_limited(base_url, tasks_selected, accounts_list=None, num_account
     tasks = []
 
     if accounts_list:
-        usernames = [acc["username"] for acc in accounts_list[:num_accounts]]
+        usernames = accounts_list[:num_accounts]
     else:
         usernames = [random_number() for _ in range(num_accounts)]
 
@@ -288,16 +291,18 @@ if __name__ == "__main__":
             print("Tidak ada file tersedia, keluar...")
             exit(1)
 
-        # Load accounts dari file
-        if file_path.suffix == ".json":
-            accounts_list = load_json(file_path)
-        else:
-            # txt -> konversi ke json & simpan permanen
-            accounts_list = txt_to_json_accounts(file_path)
-            json_file = file_path.with_suffix(".json")
-            with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(accounts_list, f, indent=4)
-            print(f"File TXT dikonversi ke JSON dan disimpan: {json_file}")
+        accounts_list = read_file(file_name=file_path)
+
+        # # Load accounts dari file
+        # if file_path.suffix == ".json":
+        #     accounts_list = load_json(file_path)
+        # else:
+        #     # txt -> konversi ke json & simpan permanen
+        #     accounts_list = txt_to_json_accounts(file_path)
+        #     json_file = file_path.with_suffix(".json")
+        #     with open(json_file, "w", encoding="utf-8") as f:
+        #         json.dump(accounts_list, f, indent=4)
+        #     print(f"File TXT dikonversi ke JSON dan disimpan: {json_file}")
 
         max_allowed = len(accounts_list)
     else:

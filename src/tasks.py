@@ -1,10 +1,15 @@
 import asyncio
 import httpx
+import random
 from httpx_socks import AsyncProxyTransport
 from playwright.async_api import async_playwright
-from extras import append_json, sanitize_filename, time_format, update_next_roulette, append_line, write_json
+from extras import append_json, sanitize_filename, time_format, update_next_roulette, append_line, write_json, read_proxies
 
 MAX_RETRIES = 3
+
+def rotate_proxy():
+    proxies = read_proxies()
+    return random.choice(proxies)
 
 # ---------------- SAFE GOTO ----------------
 async def safe_goto(page, username, url, retries=3, delay=2, update_state=None, **kwargs):
@@ -16,17 +21,20 @@ async def safe_goto(page, username, url, retries=3, delay=2, update_state=None, 
             if response and response.status == 309:
                 loc = response.headers.get("Location")
                 if loc:
-                    await update_state(f"[{username}] createAccount: [INFO] Redirect 309 ke {loc}....")
+                    await update_state(f"[{username}] createAccount: [ANTIBOT] Redirect 309....")
                     return await page.goto(loc, **kwargs)
 
-            await update_state(f"[{username}] createAccount: [WARN] Attempt {attempt} gagal (status={getattr(response, 'status', None)}), retrying....")
+            await update_state(f"[{username}] createAccount: [WARN] Attempt {attempt} Failed (status={getattr(response, 'status', None)}), retrying....")
         except Exception as e:
-            await update_state(f"[{username}] createAccount: [ERROR] Attempt {attempt} error: {e}....")
+            err_type = type(e).__name__
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            code_info = status_code if status_code is not None else "-"
+            await update_state(f"[{username}] createAccount: [ERROR] Attempt {attempt} error: {err_type} ({code_info})....")
             None
 
         await asyncio.sleep(delay)
 
-    await update_state(f"[{username}] createAccount: [FAIL] Gagal load {url} setelah {retries} percobaan....")
+    await update_state(f"[{username}] createAccount: [FAIL] Failed load {url} after {retries} attempt....")
     return None
 
 async def launch_browser(p, proxy, username, update_state):
@@ -34,7 +42,7 @@ async def launch_browser(p, proxy, username, update_state):
         proxy_parts = proxy.split("@")
         creds, server = proxy_parts[0], proxy_parts[1]
         username_proxy, password_proxy = creds.split(":")
-        await update_state(f"[{username}] createAccount: Starting Browser dengan proxy {server}....")
+        await update_state(f"[{username}] createAccount: Starting Browser....")
         return await p.chromium.launch(
             headless=False, 
             args=[
@@ -64,11 +72,10 @@ async def launch_browser(p, proxy, username, update_state):
             ],
         )
 
-
 # ---------------- DO AUTH ----------------
 async def do_auth(baseUrl, username, password, mode="login", proxy="", update_state=None, file_name=None):
     result = {"sid": None, "uuid": None}
-    counters = {"success": 0, "fail": 0}
+    counters = {"success": 0, "fail": 0, "sid":""}
 
     for attempt in range(1, 3 + 1):
         try:
@@ -104,10 +111,11 @@ async def do_auth(baseUrl, username, password, mode="login", proxy="", update_st
                         result["sid"] = headers.get("sid")
                         result["uuid"] = headers.get("uuid")
                         results = [{"username": username, "sid": result["sid"], "uuid": result["uuid"], "next_roulette": ""}]
+                        counters["sid"] = {"sid": result["sid"]}
                         write_json("./data/session.json", results)
 
                         if not login_message:
-                            await update_state(f"[{username}] createAccount: Login Successful..... {result['sid']}")
+                            await update_state(f"[{username}] createAccount: Login Successful.....")
                         else:
                             await update_state(f"[{username}] createAccount: {login_message}")
 
@@ -121,7 +129,7 @@ async def do_auth(baseUrl, username, password, mode="login", proxy="", update_st
                         if register_message:
                             await update_state(f"[{username}] createAccount: {register_message}")
                         if data.get("code") == "200":
-                            append_line("data/seasons.txt", username)
+                            append_line("data/accounts/accounts.txt", username)
                             await update_state(f"[{username}] createAccount: Register Successful....")
                             # counters["success"] += 1
                         else:
@@ -133,7 +141,7 @@ async def do_auth(baseUrl, username, password, mode="login", proxy="", update_st
                 # pakai safe_goto tanpa retry
                 resp = await safe_goto(page, username, f"{baseUrl}/account", retries=1, update_state=update_state, timeout=60000, wait_until="domcontentloaded")
                 if not resp:
-                    await update_state(f"[{username}] Attempt {attempt}: gagal load, close browser....")
+                    await update_state(f"[{username}] Attempt {attempt}: failed to load, close browser....")
                     # counters["fail"] += 1
                     await browser.close()
                     await asyncio.sleep(2)
@@ -169,7 +177,10 @@ async def do_auth(baseUrl, username, password, mode="login", proxy="", update_st
                 return counters
 
         except Exception as e:
-            await update_state(f"[{username}] Attempt {attempt} error: {e}, retry dengan browser baru....")
+            err_type = type(e).__name__
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            code_info = status_code if status_code is not None else "-"
+            await update_state(f"[{username}] Attempt {attempt} error: {err_type} ({code_info}), retrying....")
             # counters["fail"] += 1
             try:
                 await browser.close()
@@ -178,7 +189,7 @@ async def do_auth(baseUrl, username, password, mode="login", proxy="", update_st
             await asyncio.sleep(2)
             continue
 
-    await update_state(f"[{username}] Gagal setelah 3 kali coba.")
+    await update_state(f"[{username}] Failed after 3 attempt.")
     return counters
 
 # ---------------- GET FREE BALANCE ----------------
@@ -187,19 +198,21 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
 
     if not sid:
         if update_state:
-            await update_state(f"[{account}] getFreeBalance: SID tidak tersedia, login dulu...")
+            await update_state(f"[{account}] getFreeBalance: SID not found, login...")
         return result
 
-    transport = AsyncProxyTransport.from_url(proxy_url) if proxy_url else None
+    roulette_detail = None
+    detail_url = f"{base_url}/activity-api/activity/detail"
+    detail_payload = {"activityId": "1335ce1c-26c7-4635-8ab3-c6b52c1419b2::vip_wheel"}
+    detail_headers = {"sid": sid, "referer": f"{base_url}/sales-promotion/turntable/1335ce1c-26c7-4635-8ab3-c6b52c1419b2::vip_wheel"}
 
-    async with httpx.AsyncClient(transport=transport, timeout=10, follow_redirects=True) as client:
-        # Ambil detail roulette
-        roulette_detail = None
-        detail_url = f"{base_url}/activity-api/activity/detail"
-        detail_payload = {"activityId": "1335ce1c-26c7-4635-8ab3-c6b52c1419b2::vip_wheel"}
-        detail_headers = {"sid": sid, "referer": f"{base_url}/sales-promotion/turntable/1335ce1c-26c7-4635-8ab3-c6b52c1419b2::vip_wheel"}
+    for attempt in range(5):
+        # rotate proxy tiap loop
+        transport = AsyncProxyTransport.from_url(f"http://{rotate_proxy()}") if proxy_url else None
 
-        for attempt in range(5):
+        report_error = ""
+
+        async with httpx.AsyncClient(transport=transport, timeout=10, follow_redirects=True) as client:
             try:
                 if update_state:
                     await update_state(f"[{account}] getFreeBalance: Fetching roulette details attempt {attempt+1}...")
@@ -210,84 +223,93 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                     await update_state(f"[{account}] getFreeBalance: Fetched roulette details successfully")
                 break
             except Exception as e:
+                err_type = type(e).__name__
+                status_code = getattr(getattr(e, "response", None), "status_code", None)
+                code_info = status_code if status_code is not None else "-"
+                report_error = f"failed: {err_type} ({code_info})"
                 if update_state:
-                    err_type = type(e).__name__  # contoh: 'TimeoutException', 'HTTPStatusError'
-                    await update_state(f"[{account}] getFreeBalance: Attempt {attempt+1} failed: {err_type}")
+                    await update_state(f"[{account}] getFreeBalance: Attempt {attempt+1} failed: {err_type} ({code_info})")
                 await asyncio.sleep(2)
 
-        if roulette_detail is None:
+    if roulette_detail is None:
+        if update_state:
+            await update_state(f"[{account}] getFreeBalance: Failed to fetch roulette details {report_error}")
+        return result
+
+    try:
+        wheel = roulette_detail.get("data", {}).get("wheel", {})
+        roulette_prize_vo = wheel.get("roulettePrizeVo", {})
+        current_vip_grade = roulette_prize_vo.get("currentVipGrade")
+        current_medal_grade = roulette_prize_vo.get("currentMedalGrade")
+        prize_info = roulette_prize_vo.get("prize", {}).get(current_medal_grade, {})
+        number_of_draws = prize_info.get("numberOfDraws")
+
+        if not number_of_draws:
             if update_state:
-                await update_state(f"[{account}] getFreeBalance: Failed to fetch roulette details")
+                await update_state(f"[{account}] getFreeBalance: No draws available")
             return result
 
-        try:
-            wheel = roulette_detail.get("data", {}).get("wheel", {})
-            roulette_prize_vo = wheel.get("roulettePrizeVo", {})
-            current_vip_grade = roulette_prize_vo.get("currentVipGrade")
-            current_medal_grade = roulette_prize_vo.get("currentMedalGrade")
-            prize_info = roulette_prize_vo.get("prize", {}).get(current_medal_grade, {})
-            number_of_draws = prize_info.get("numberOfDraws")
+        times = number_of_draws.get("times", 0)
+        result["roulette"] = number_of_draws.get("nextTime")
 
-            if not number_of_draws:
-                if update_state:
-                    await update_state(f"[{account}] getFreeBalance: No draws available")
-                return result
+        if times > 0:
+            draw_url = f"{base_url}/activity-api/roulette/luckyDraw"
+            prizes = []
+            for i in range(times):
+                draw_payload = {
+                    "activityMessageId": "1335ce1c-26c7-4635-8ab3-c6b52c1419b2",
+                    "vipLevel": current_vip_grade,
+                    "medalId": current_medal_grade,
+                }
+                draw_headers = {"sid": sid, "referer": detail_headers["referer"]}
 
-            times = number_of_draws.get("times", 0)
-            result["roulette"] = number_of_draws.get("nextTime")
-
-            if times > 0:
-                draw_url = f"{base_url}/activity-api/roulette/luckyDraw"
-                prizes = []
-                for i in range(times):
-                    draw_payload = {
-                        "activityMessageId": "1335ce1c-26c7-4635-8ab3-c6b52c1419b2",
-                        "vipLevel": current_vip_grade,
-                        "medalId": current_medal_grade,
-                    }
-                    draw_headers = {"sid": sid, "referer": detail_headers["referer"]}
-
-                    draw_data = None
-                    for attempt in range(3):
-                        try:
-                            if update_state:
-                                await update_state(f"[{account}] getFreeBalance: Spinning #{i+1} attempt {attempt+1}...")
-                            resp = await client.post(draw_url, json=draw_payload, headers=draw_headers)
-                            resp.raise_for_status()
-                            draw_data = resp.json()
-                            if update_state:
-                                await update_state(f"[{account}] getFreeBalance: Spin #{i+1} success")
-                            break
-                        except Exception as e:
-                            if update_state:
-                                await update_state(f"[{account}] getFreeBalance: Spin #{i+1} attempt {attempt+1} failed: {e}")
-                            await asyncio.sleep(2)
-
-                    if draw_data is None:
+                draw_data = None
+                for attempt in range(3):
+                    try:
                         if update_state:
-                            await update_state(f"[{account}] getFreeBalance: Spin #{i+1} failed")
-                        return result
-
-                    prize_type = draw_data.get("data", {}).get("type")
-                    prize_amount = draw_data.get("data", {}).get("prizeAmount")
-                    prizes.append({prize_type: prize_amount})
-                    if update_state:
-                        await update_state(f"[{account}] getFreeBalance: Spin #{i+1} got {prize_type}: {prize_amount}")
-
-                    if i < times - 1:
+                            await update_state(f"[{account}] getFreeBalance: Spinning #{i+1} attempt {attempt+1}...")
+                        resp = await client.post(draw_url, json=draw_payload, headers=draw_headers)
+                        resp.raise_for_status()
+                        draw_data = resp.json()
+                        if update_state:
+                            await update_state(f"[{account}] getFreeBalance: Spin #{i+1} success")
+                        break
+                    except Exception as e:
+                        err_type = type(e).__name__
+                        status_code = getattr(getattr(e, "response", None), "status_code", None)
+                        code_info = status_code if status_code is not None else "-"
+                        if update_state:
+                            await update_state(f"[{account}] getFreeBalance: Spin #{i+1} attempt {attempt+1} failed: {err_type} ({code_info})")
                         await asyncio.sleep(2)
 
-                if update_state:
-                    prize_summary = ", ".join([f"{k}: {v}" for p in prizes for k, v in p.items()])
-                    await update_state(f"[{account}] getFreeBalance: Claimed x{times} spins -> {prize_summary}")
-            else:
-                update_next_roulette(sanitize_filename(base_url), account, result["roulette"])
-                if update_state:
-                    await update_state(f"[{account}] getFreeBalance: Next spin at {time_format(result['roulette'])}")
+                if draw_data is None:
+                    if update_state:
+                        await update_state(f"[{account}] getFreeBalance: Spin #{i+1} failed")
+                    return result
 
-        except Exception as e:
+                prize_type = draw_data.get("data", {}).get("type")
+                prize_amount = draw_data.get("data", {}).get("prizeAmount")
+                prizes.append({prize_type: prize_amount})
+                if update_state:
+                    await update_state(f"[{account}] getFreeBalance: Spin #{i+1} got {prize_type}: {prize_amount}")
+
+                if i < times - 1:
+                    await asyncio.sleep(2)
+
             if update_state:
-                await update_state(f"[{account}] getFreeBalance: Unexpected error: {e}")
+                prize_summary = ", ".join([f"{k}: {v}" for p in prizes for k, v in p.items()])
+                await update_state(f"[{account}] getFreeBalance: Claimed x{times} spins -> {prize_summary}")
+        else:
+            update_next_roulette(sanitize_filename(base_url), account, result["roulette"])
+            if update_state:
+                await update_state(f"[{account}] getFreeBalance: Next spin at {time_format(result['roulette'])}")
+
+    except Exception as e:
+        err_type = type(e).__name__
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        code_info = status_code if status_code is not None else "-"
+        if update_state:
+            await update_state(f"[{account}] getFreeBalance: Unexpected error: {err_type} ({code_info})")
 
     return result
 
@@ -297,7 +319,7 @@ async def run_claim_bonus_async(sid: str, account: str, base_url: str, update_st
 
     if not sid:
         if update_state:
-            await update_state(f"[{account}] claimBonus: SID tidak tersedia, login dulu...")
+            await update_state(f"[{account}] claimBonus: SID not found, login...")
         return result
 
     transport = AsyncProxyTransport.from_url(proxy_url) if proxy_url else None
@@ -318,8 +340,11 @@ async def run_claim_bonus_async(sid: str, account: str, base_url: str, update_st
                 bonus_cards = resp.json().get("data", {}).get("model", [])
                 break
             except Exception as e:
+                err_type = type(e).__name__
+                status_code = getattr(getattr(e, "response", None), "status_code", None)
+                code_info = status_code if status_code is not None else "-"
                 if update_state:
-                    await update_state(f"[{account}] claimBonus: Attempt {attempt+1} failed: {e}")
+                    await update_state(f"[{account}] claimBonus: Attempt {attempt+1} failed: {err_type} ({code_info})")
                 await asyncio.sleep(2)
 
         if not bonus_cards:
@@ -345,8 +370,11 @@ async def run_claim_bonus_async(sid: str, account: str, base_url: str, update_st
                     claim_data = resp.json()
                     break
                 except Exception as e:
+                    err_type = type(e).__name__
+                    status_code = getattr(getattr(e, "response", None), "status_code", None)
+                    code_info = status_code if status_code is not None else "-"
                     if update_state:
-                        await update_state(f"[{account}] claimBonus: Attempt {attempt+1} failed: {e}")
+                        await update_state(f"[{account}] claimBonus: Attempt {attempt+1} failed: {err_type} ({code_info})")
                     await asyncio.sleep(2)
 
             if claim_data and claim_data.get("data", {}).get("code") != "PLAYER_BONUS_POINT_NOT_ENOUGH":
@@ -366,7 +394,7 @@ async def run_check_balance_async(sid: str, account: str, base_url: str, balance
 
     if not sid:
         if update_state:
-            await update_state(f"[{account}] checkBalance: SID tidak tersedia, login dulu...")
+            await update_state(f"[{account}] checkBalance: SID not found, login...")
         return result
 
     transport = AsyncProxyTransport.from_url(proxy_url) if proxy_url else None
@@ -385,8 +413,11 @@ async def run_check_balance_async(sid: str, account: str, base_url: str, balance
                 balance_data = resp.json().get("data", {}).get("availableBalanceResult", {})
                 break
             except Exception as e:
+                err_type = type(e).__name__
+                status_code = getattr(getattr(e, "response", None), "status_code", None)
+                code_info = status_code if status_code is not None else "-"
                 if update_state:
-                    await update_state(f"[{account}] checkBalance: Attempt {attempt+1} failed: {e}")
+                    await update_state(f"[{account}] checkBalance: Attempt {attempt+1} failed: {err_type} ({code_info})")
                 await asyncio.sleep(2)
 
         if balance_data is None:
