@@ -264,6 +264,7 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                 draw_headers = {"sid": sid, "referer": detail_headers["referer"]}
 
                 draw_data = None
+                failed_result = None
                 for attempt in range(3):
                     try:
                         if update_state:
@@ -278,13 +279,14 @@ async def run_get_free_balance_async(sid: str, account: str, base_url: str, upda
                         err_type = type(e).__name__
                         status_code = getattr(getattr(e, "response", None), "status_code", None)
                         code_info = status_code if status_code is not None else "-"
+                        failed_result = f"{err_type} ({code_info})"
                         if update_state:
                             await update_state(f"[{account}] getFreeBalance: Spin #{i+1} attempt {attempt+1} failed: {err_type} ({code_info})")
                         await asyncio.sleep(2)
 
                 if draw_data is None:
                     if update_state:
-                        await update_state(f"[{account}] getFreeBalance: Spin #{i+1} failed")
+                        await update_state(f"[{account}] getFreeBalance: Spin #{i+1} failed {failed_result}")
                     return result
 
                 prize_type = draw_data.get("data", {}).get("type")

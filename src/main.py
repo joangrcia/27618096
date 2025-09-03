@@ -35,7 +35,10 @@ async def spinner_task(states: dict, refresh_rate: float = 0.2):
                 lines.append("==========TASK INFO==========")
                 lines.append(f"Success: {task_results['success']} | Failed: {task_results['fail']}")
                 lines.append("=============================")
-                live.update(Text("\n".join(lines)))
+                lines.extend([""] * 10)  # 10 baris kosong supaya tulisan worker tidak ketutup
+                MAX_LINES = 50
+                lines_to_show = lines[-MAX_LINES:]  # hanya 20 baris terakhir
+                live.update(Text("\n".join(lines_to_show)))
 
                 if states and all(state["done"] for state in states.values()):
                     break
